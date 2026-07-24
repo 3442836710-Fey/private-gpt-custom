@@ -1,0 +1,23 @@
+server:
+  env_name: local
+  port: 8080
+
+llm:
+  default_model: gemma4:e4b
+  auto_discover_models: true
+
+embedding:
+  default_model: nomic-embed-text:latest
+  auto_discover_models: true
+
+openai:
+  api_base: http://localhost:11434/v1
+  api_key: ollama
+  embedding_api_base: http://localhost:11434/v1
+  embedding_api_key: ollama
+
+vectorstore:
+  database: qdrant
+
+qdrant:
+  path: local_data/qdrant

@@ -1,9 +1,12 @@
 from fastapi import APIRouter, Depends, Request, Response
 from starlette.responses import StreamingResponse
+import diskcache
+from pydantic import BaseModel
 
 from private_gpt.chat.input_models import (
     CountTokensInput,
     CountTokensOutput,
+    MessageInput,
     System,
     Thinking,
     ToolChoice,
@@ -18,6 +21,8 @@ from private_gpt.server.chat.chat_request_mapper import ChatRequestMapper
 from private_gpt.server.chat.chat_service import ChatService, ChatValidationResult
 from private_gpt.server.chat_async.chat_async_facade import ChatAsyncFacadeService
 from private_gpt.server.utils.auth import authenticated
+
+query_cache = diskcache.Cache("local_data/query_cache")
 
 chat_router = APIRouter(
     prefix="/v1",
@@ -420,3 +425,67 @@ async def validate_messages(
     if not result.valid:
         response.status_code = 400
     return result
+
+
+class MobileQueryRequest(BaseModel):
+    prompt: str
+    system_prompt: str | None = "You are a helpful assistant."
+
+
+class MobileQueryResponse(BaseModel):
+    response: str
+    latency_ms: float
+    cached: bool = False
+
+
+@chat_router.post("/mobile/quick-query", response_model=MobileQueryResponse)
+async def mobile_quick_query(
+    request: Request,
+    body: MobileQueryRequest,
+) -> MobileQueryResponse:
+    import time
+    start_time = time.time()
+
+    # 1. Check cache
+    cache_key = f"mobile_query:{body.prompt}:{body.system_prompt}"
+    if cache_key in query_cache:
+        cached_text = query_cache[cache_key]
+        latency = (time.time() - start_time) * 1000
+        return MobileQueryResponse(
+            response=cached_text,
+            latency_ms=latency,
+            cached=True,
+        )
+
+    # 2. Cache miss, call service
+    chat_service: ChatService = request.state.injector.get(ChatService)
+    request_mapper: ChatRequestMapper = request.state.injector.get(ChatRequestMapper)
+
+    # Construct standard ChatBody
+    chat_body = ChatBody(
+        model="default",
+        stream=False,
+        messages=[
+            MessageInput(role="user", content=body.prompt)
+        ],
+        system=[
+            System(text=body.system_prompt)
+        ]
+    )
+
+    # Map to ChatRequest
+    chat_request = await request_mapper.create_request_from_body(chat_body)
+
+    # Run inference
+    response_obj = await chat_service.chat(chat_request)
+    response_text = response_obj.response or ""
+
+    # 3. Write cache (expire in 1 hour / 3600 seconds)
+    query_cache.set(cache_key, response_text, expire=3600)
+
+    latency = (time.time() - start_time) * 1000
+    return MobileQueryResponse(
+        response=response_text,
+        latency_ms=latency,
+        cached=False,
+    )

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 import json
 import logging
 import os
@@ -123,6 +126,9 @@ class FileLock:
         logger.info(f"Acquiring lock: {self.lock_file}")
         self.lock_file.parent.mkdir(parents=True, exist_ok=True)
         self._fd = open(self.lock_file, "w")
+        if fcntl is None:
+            logger.info("Lock acquired (dummy, fcntl not available)")
+            return self
         start = time.time()
         while True:
             try:
@@ -148,7 +154,8 @@ class FileLock:
     ) -> None:
         if self._fd:
             try:
-                fcntl.flock(self._fd.fileno(), fcntl.LOCK_UN)
+                if fcntl is not None:
+                    fcntl.flock(self._fd.fileno(), fcntl.LOCK_UN)
                 self._fd.close()
                 logger.info("Lock released")
             except Exception as e:
